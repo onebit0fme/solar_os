@@ -1113,7 +1113,9 @@ private:
             .conversation_title = record.display_name,
             .contact_id = endpoint.contact_id,
             .endpoint_id = endpoint.id,
-            .provider_message_key = packet_key(packet),
+            // A retry changes the attempt byte and so the packet hash; key
+            // on sender timestamp + text (key 0) so retries dedupe.
+            .provider_message_key = 0,
             .timestamp_ms = (uint64_t)sender_timestamp * 1000ULL,
             .security_flags = security,
             .sender = record.display_name,
