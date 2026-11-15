@@ -999,11 +999,20 @@ private:
 
         resetContacts();
         contacts_loaded_ = 0;
+        // The MeshCore table holds only MAX_CONTACTS entries, while the
+        // Contacts store keeps hundreds of discovered nodes. Load trusted
+        // endpoints first so they always fit, then fill with the rest.
+        for (unsigned pass = 0; pass < 2U; pass++)
         for (size_t index = 0; index < endpoint_count; index++) {
             const solar_os_endpoint_t &endpoint = endpoints[index];
             if (endpoint.provider != solar_os_meshcore_current_id() ||
                 endpoint.address.length != PUB_KEY_SIZE ||
                 endpoint.trust == SOLAR_OS_CONTACT_TRUST_BLOCKED) {
+                continue;
+            }
+            const bool trusted =
+                endpoint.trust == SOLAR_OS_CONTACT_TRUST_TRUSTED;
+            if (trusted != (pass == 0U)) {
                 continue;
             }
             solar_os_contact_t contact_record{};
