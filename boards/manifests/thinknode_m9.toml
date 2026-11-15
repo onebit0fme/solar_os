@@ -177,7 +177,7 @@ bindings = { pwm = 9 }
 [[devices]]
 driver = "nmea"
 name = "gnss0"
-bindings = { uart = "uart1", power = 11, active = 0, alt_baud = 9600 }
+bindings = { uart = "uart1", power = 11, active = 1, alt_baud = 9600 }
 
 # The LR1110's band is a purchase-time SKU with nothing on the board to read it
 # back from, so the manifest names the 915 MHz variant and an 868 MHz unit has
