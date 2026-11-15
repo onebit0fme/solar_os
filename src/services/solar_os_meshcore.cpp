@@ -876,6 +876,14 @@ protected:
         }
         direct_.attempt++;
         retries_++;
+        if (direct_.attempt >= 2U &&
+            contact->out_path_len != OUT_PATH_UNKNOWN) {
+            // The stored route may be stale (relay gone, peer moved).
+            // Flood the last attempt; the ACK's path return relearns a
+            // working route.
+            contact->out_path_len = OUT_PATH_UNKNOWN;
+            onContactPathUpdated(*contact);
+        }
         (void)solar_os_messaging_outbox_update(
             direct_.request_id,
             SOLAR_OS_DELIVERY_QUEUED,
