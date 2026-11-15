@@ -944,9 +944,10 @@ void BaseChatMesh::loop() {
   Mesh::loop();
 
   if (txt_send_timeout && millisHasNowPassed(txt_send_timeout)) {
-    // failed to get an ACK
-    onSendTimeout();
+    // failed to get an ACK; clear first so a retry sent from onSendTimeout()
+    // can re-arm the timer
     txt_send_timeout = 0;
+    onSendTimeout();
   }
 
   if (_pendingLoopback) {
