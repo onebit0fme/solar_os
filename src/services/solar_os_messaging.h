@@ -379,6 +379,9 @@ esp_err_t solar_os_messaging_outbox_update(
     uint32_t request_id,
     solar_os_delivery_state_t state,
     const char *error);
+/* Record a delivery acknowledgement that arrived after the message left the
+ * outbox, for example after it was already marked failed. */
+esp_err_t solar_os_messaging_mark_delivered(solar_os_message_key_t key);
 esp_err_t solar_os_messaging_read_event_after(uint32_t *cursor,
                                               solar_os_messaging_event_t *event);
 uint64_t solar_os_messaging_provider_context(

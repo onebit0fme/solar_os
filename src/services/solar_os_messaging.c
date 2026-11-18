@@ -2024,6 +2024,47 @@ esp_err_t solar_os_messaging_outbox_update(
     return ESP_OK;
 }
 
+esp_err_t solar_os_messaging_mark_delivered(solar_os_message_key_t key)
+{
+    if (key == 0) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    esp_err_t error = solar_os_messaging_init();
+    if (error != ESP_OK) {
+        return error;
+    }
+    messaging_history_lock();
+    messaging_message_slot_t *slot = messaging_history_cache_locked(key);
+    if (slot == NULL ||
+        slot->message.direction != SOLAR_OS_MESSAGE_OUTBOUND) {
+        messaging_history_unlock();
+        return ESP_ERR_NOT_FOUND;
+    }
+    if (slot->message.delivery == SOLAR_OS_DELIVERY_DELIVERED) {
+        messaging_history_unlock();
+        return ESP_OK;
+    }
+    *messaging.pending_slot = *slot;
+    messaging.pending_slot->message.delivery = SOLAR_OS_DELIVERY_DELIVERED;
+    messaging.pending_slot->message.error[0] = '\0';
+    error = messaging_history_commit_locked(messaging.pending_slot);
+    if (error != ESP_OK) {
+        messaging_history_unlock();
+        return error;
+    }
+    *slot = *messaging.pending_slot;
+    slot->revision++;
+    messaging_note_generation_locked();
+    messaging_publish_event_locked(SOLAR_OS_MESSAGING_EVENT_DELIVERY,
+                                    slot->message.provider,
+                                    slot->message.conversation_id,
+                                    key,
+                                    SOLAR_OS_DELIVERY_DELIVERED,
+                                    ESP_OK);
+    messaging_history_unlock();
+    return ESP_OK;
+}
+
 esp_err_t solar_os_messaging_read_event_after(uint32_t *cursor,
                                               solar_os_messaging_event_t *event)
 {

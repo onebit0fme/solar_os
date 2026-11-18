@@ -31,6 +31,9 @@ extern "C" {
 #include "solar_os_meshcore_stream.h"
 #include "solar_os_radio.h"
 #include "solar_os_time.h"
+#include "solar_os_log.h"
+
+static const char *DM_TAG = "meshcore_dm";
 }
 
 namespace {
@@ -471,6 +474,15 @@ private:
     esp_err_t last_error_ = ESP_OK;
 };
 
+// Acknowledgement codes of recent direct-message attempts. Every attempt has
+// its own code, and over several hops an ACK can arrive after the next attempt
+// was sent or after the message was marked failed.
+struct RecentAck {
+    uint32_t ack;
+    solar_os_message_key_t key;
+};
+static constexpr size_t kRecentAckCount = 24;
+
 struct PendingDirect {
     bool active;
     uint32_t request_id;
@@ -683,6 +695,12 @@ protected:
 
     void onContactPathUpdated(const ContactInfo &contact) override
     {
+        if (contact.out_path_len == OUT_PATH_UNKNOWN) {
+            SOLAR_OS_LOGI(DM_TAG, "route to %s reset", contact.name);
+        } else {
+            SOLAR_OS_LOGI(DM_TAG, "route to %s: %u hops", contact.name,
+                          (unsigned)(contact.out_path_len & 63U));
+        }
         MeshcoreMetadata metadata{};
         metadata.version = kMetadataVersion;
         metadata.type = contact.type;
@@ -714,20 +732,50 @@ protected:
 
     ContactInfo *processAck(const uint8_t *data) override
     {
-        if (!direct_.active || data == nullptr ||
-            memcmp(data, &direct_.expected_ack,
-                   sizeof(direct_.expected_ack)) != 0) {
+        if (data == nullptr) {
             return nullptr;
         }
-        ContactInfo *contact =
-            lookupContactForEndpoint(direct_.endpoint_id);
-        (void)solar_os_messaging_outbox_update(
-            direct_.request_id,
-            SOLAR_OS_DELIVERY_DELIVERED,
-            nullptr);
-        direct_.active = false;
+        uint32_t ack = 0;
+        memcpy(&ack, data, sizeof(ack));
+        solar_os_message_key_t key = 0;
+        if (direct_.active && ack == direct_.expected_ack) {
+            key = direct_.message_key;
+        } else {
+            for (RecentAck &recent : recent_acks_) {
+                if (recent.key != 0 && recent.ack == ack) {
+                    key = recent.key;
+                    break;
+                }
+            }
+        }
+        if (key == 0) {
+            SOLAR_OS_LOGI(DM_TAG, "ack %08" PRIx32 " matches no recent message", ack);
+            return nullptr;
+        }
+        for (RecentAck &recent : recent_acks_) {
+            if (recent.key == key) {
+                recent.key = 0;
+            }
+        }
         acknowledgements_++;
-        return contact;
+        if (direct_.active && key == direct_.message_key) {
+            // This message is still in flight: finish it and let the caller
+            // cancel the retry timer.
+            SOLAR_OS_LOGI(DM_TAG, "ack for attempt %s (now at attempt %u)",
+                          ack == direct_.expected_ack ? "current" : "earlier",
+                          (unsigned)direct_.attempt);
+            (void)solar_os_messaging_outbox_update(
+                direct_.request_id,
+                SOLAR_OS_DELIVERY_DELIVERED,
+                nullptr);
+            direct_.active = false;
+            return lookupContactForEndpoint(direct_.endpoint_id);
+        }
+        // An older message, already failed or superseded. Fix its status but
+        // return null so the timer of the message in flight keeps running.
+        SOLAR_OS_LOGI(DM_TAG, "late ack for an earlier message");
+        (void)solar_os_messaging_mark_delivered(key);
+        return nullptr;
     }
 
     void onMessageRecv(const ContactInfo &contact,
@@ -735,6 +783,11 @@ protected:
                        uint32_t sender_timestamp,
                        const char *text) override
     {
+        SOLAR_OS_LOGI(DM_TAG, "message from %s: %s, %u hops, snr %d: %.24s",
+                      contact.name,
+                      packet->isRouteFlood() ? "flood" : "direct",
+                      (unsigned)(packet->path_len & 63U),
+                      (int)packet->getSNR(), text != nullptr ? text : "");
         publishDirect(contact, packet, sender_timestamp, text);
     }
 
@@ -854,6 +907,7 @@ protected:
         if (!direct_.active) {
             return;
         }
+        SOLAR_OS_LOGI(DM_TAG, "no ack for attempt %u", (unsigned)direct_.attempt);
         if (direct_.attempt >= 2U) {
             (void)solar_os_messaging_outbox_update(
                 direct_.request_id,
@@ -895,6 +949,10 @@ protected:
                                        direct_.body,
                                        direct_.expected_ack,
                                        timeout);
+        logSend(*contact, "retry", result, timeout);
+        if (result != MSG_SEND_FAILED) {
+            rememberAck(direct_.expected_ack, direct_.message_key);
+        }
         if (result == MSG_SEND_FAILED) {
             (void)solar_os_messaging_outbox_update(
                 direct_.request_id,
@@ -1194,6 +1252,10 @@ private:
                                            direct_.body,
                                            direct_.expected_ack,
                                            timeout);
+            logSend(*contact, "send", result, timeout);
+            if (result != MSG_SEND_FAILED) {
+                rememberAck(direct_.expected_ack, direct_.message_key);
+            }
             if (result == MSG_SEND_FAILED) {
                 direct_.active = false;
                 (void)solar_os_messaging_outbox_update(
@@ -1302,6 +1364,32 @@ private:
     uint32_t acknowledgements_ = 0;
     uint32_t retries_ = 0;
     esp_err_t last_error_ = ESP_OK;
+    RecentAck recent_acks_[kRecentAckCount]{};
+    size_t recent_ack_next_ = 0;
+
+    void rememberAck(uint32_t ack, solar_os_message_key_t key)
+    {
+        recent_acks_[recent_ack_next_] = {ack, key};
+        recent_ack_next_ = (recent_ack_next_ + 1U) % kRecentAckCount;
+    }
+
+    void logSend(const ContactInfo &contact, const char *what, int result,
+                 uint32_t timeout)
+    {
+        if (result == MSG_SEND_SENT_FLOOD) {
+            SOLAR_OS_LOGI(DM_TAG, "%s to %s attempt %u: flood, wait %u ms",
+                          what, contact.name, (unsigned)direct_.attempt,
+                          (unsigned)timeout);
+        } else if (result == MSG_SEND_SENT_DIRECT) {
+            SOLAR_OS_LOGI(DM_TAG, "%s to %s attempt %u: direct %u hops, wait %u ms",
+                          what, contact.name, (unsigned)direct_.attempt,
+                          (unsigned)(contact.out_path_len & 63U),
+                          (unsigned)timeout);
+        } else {
+            SOLAR_OS_LOGW(DM_TAG, "%s to %s attempt %u: send failed",
+                          what, contact.name, (unsigned)direct_.attempt);
+        }
+    }
 };
 
 struct MeshcoreContext {
