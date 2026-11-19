@@ -5,6 +5,7 @@
 #include <stddef.h>
 #include <stdint.h>
 #include <stdio.h>
+#include <unistd.h>
 #include <string.h>
 
 #include "freertos/FreeRTOS.h"
@@ -364,7 +365,10 @@ static void log_job_poll(void)
     }
 
     if (log_job.file != NULL) {
+        // FAT records a file's size only when it is synced or closed; without
+        // this a reset or power loss leaves the log at its last synced size.
         (void)fflush(log_job.file);
+        (void)fsync(fileno(log_job.file));
     }
     log_job.last_error = ESP_OK;
 }
