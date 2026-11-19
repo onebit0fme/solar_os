@@ -185,7 +185,7 @@ static const solar_os_app_registry_entry_t registered_apps[] = {
     APP_ENTRY("recorder", "interactive WAV recorder", &solar_os_recorder_app, SOLAR_OS_APP_CAP_TEXT | SOLAR_OS_APP_CAP_GRAPHICS | SOLAR_OS_APP_CAP_DISPLAY | SOLAR_OS_APP_CAP_PORT, "recorder [--tui] [file.wav]", 1, 3),
 #endif
 #if SOLAR_OS_PACKAGE_APP_CHAT
-    APP_ENTRY("chat", "provider-neutral conversation client", &solar_os_chat_app, SOLAR_OS_APP_CAP_TEXT | SOLAR_OS_APP_CAP_DISPLAY | SOLAR_OS_APP_CAP_PORT, "chat [instance|class|conversation-id]", 1, 2),
+    APP_ENTRY("chat", "provider-neutral conversation client", &solar_os_chat_app, SOLAR_OS_APP_CAP_TEXT | SOLAR_OS_APP_CAP_DISPLAY | SOLAR_OS_APP_CAP_PORT, "chat [instance|class|conversation-id|title]", 1, 2),
     APP_ENTRY("messages", "manage messaging instances, connections, and history", &solar_os_messages_app, SOLAR_OS_APP_CAP_TEXT | SOLAR_OS_APP_CAP_DISPLAY | SOLAR_OS_APP_CAP_PORT, "messages", 1, 1),
 #endif
 #if SOLAR_OS_PACKAGE_APP_CONTACTS

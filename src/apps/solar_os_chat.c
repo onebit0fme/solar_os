@@ -2323,7 +2323,25 @@ static bool chat_parse_selector(const char *selector)
     char *end = NULL;
     const unsigned long id = strtoul(selector, &end, 10);
     if (end == selector || *end != '\0' || id == 0U || id > UINT32_MAX) {
-        return false;
+        // Not a number: open the conversation with this title. Conversation
+        // ids can change across restarts, titles (contact names) do not.
+        solar_os_messaging_conversation_t *list = solar_os_memory_calloc(
+            SOLAR_OS_MESSAGING_CONVERSATION_CAPACITY, sizeof(*list),
+            SOLAR_OS_MEMORY_EXTERNAL_REQUIRED, "chat.selector");
+        if (list == NULL) {
+            return false;
+        }
+        const size_t count = solar_os_messaging_conversation_snapshot(
+            list, SOLAR_OS_MESSAGING_CONVERSATION_CAPACITY);
+        solar_os_conversation_id_t found = 0;
+        for (size_t i = 0; i < count && found == 0; i++) {
+            if (strcasecmp(list[i].title, selector) == 0) {
+                found = list[i].id;
+            }
+        }
+        solar_os_memory_free(list);
+        chat_app.initial_conversation_id = found;
+        return found != 0;
     }
     solar_os_messaging_conversation_t conversation;
     if (solar_os_messaging_conversation_get(
