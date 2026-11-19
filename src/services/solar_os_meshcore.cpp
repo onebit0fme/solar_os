@@ -53,7 +53,11 @@ constexpr char kGroupLabelPrefix[] = "group:";
 constexpr char kPublicPsk[] = "izOH6cXN6mrJ5e26oRXNcg==";
 constexpr uint32_t kPublicGroupId = 0x80000001U;
 constexpr uint32_t kSendTimeoutBaseMs = 500U;
-constexpr float kFloodTimeoutFactor = 16.0F;
+// A flooded message and its ACK each take about 4 s over two hops (field logs,
+// 2026-11-19); retrying sooner only floods the mesh again while the ACK is
+// on its way back.
+constexpr uint32_t kFloodTimeoutBaseMs = 4000U;
+constexpr float kFloodTimeoutFactor = 32.0F;
 constexpr float kDirectTimeoutFactor = 6.0F;
 constexpr uint32_t kDirectPerHopExtraMs = 250U;
 constexpr uint32_t kRadioSendTimeoutFloorMs = 3000U;
@@ -480,6 +484,7 @@ private:
 struct RecentAck {
     uint32_t ack;
     solar_os_message_key_t key;
+    bool done;   // message already acknowledged; later copies are duplicates
 };
 static constexpr size_t kRecentAckCount = 24;
 
@@ -743,6 +748,11 @@ protected:
         } else {
             for (RecentAck &recent : recent_acks_) {
                 if (recent.key != 0 && recent.ack == ack) {
+                    if (recent.done) {
+                        SOLAR_OS_LOGI(DM_TAG, "duplicate ack via %s",
+                                      ack_via_path ? "path return" : "plain ack");
+                        return nullptr;
+                    }
                     key = recent.key;
                     break;
                 }
@@ -754,16 +764,17 @@ protected:
         }
         for (RecentAck &recent : recent_acks_) {
             if (recent.key == key) {
-                recent.key = 0;
+                recent.done = true;
             }
         }
         acknowledgements_++;
         if (direct_.active && key == direct_.message_key) {
             // This message is still in flight: finish it and let the caller
             // cancel the retry timer.
-            SOLAR_OS_LOGI(DM_TAG, "ack for attempt %s (now at attempt %u)",
+            SOLAR_OS_LOGI(DM_TAG, "ack for attempt %s (now at attempt %u) via %s",
                           ack == direct_.expected_ack ? "current" : "earlier",
-                          (unsigned)direct_.attempt);
+                          (unsigned)direct_.attempt,
+                          ack_via_path ? "path return" : "plain ack");
             (void)solar_os_messaging_outbox_update(
                 direct_.request_id,
                 SOLAR_OS_DELIVERY_DELIVERED,
@@ -773,9 +784,18 @@ protected:
         }
         // An older message, already failed or superseded. Fix its status but
         // return null so the timer of the message in flight keeps running.
-        SOLAR_OS_LOGI(DM_TAG, "late ack for an earlier message");
+        SOLAR_OS_LOGI(DM_TAG, "late ack for an earlier message via %s",
+                      ack_via_path ? "path return" : "plain ack");
         (void)solar_os_messaging_mark_delivered(key);
         return nullptr;
+    }
+
+    void onAckReplySent(const ContactInfo &to, uint8_t hops, bool path_sent,
+                        bool ack_sent) override
+    {
+        SOLAR_OS_LOGI(DM_TAG, "replied to %s (%u hops): path return %s, plain ack %s",
+                      to.name, (unsigned)hops, path_sent ? "queued" : "FAILED",
+                      ack_sent ? "queued" : "FAILED");
     }
 
     void onMessageRecv(const ContactInfo &contact,
@@ -888,7 +908,7 @@ protected:
 
     uint32_t calcFloodTimeoutMillisFor(uint32_t airtime) const override
     {
-        return kSendTimeoutBaseMs +
+        return kFloodTimeoutBaseMs +
             (uint32_t)((float)airtime * kFloodTimeoutFactor);
     }
 
@@ -1369,7 +1389,7 @@ private:
 
     void rememberAck(uint32_t ack, solar_os_message_key_t key)
     {
-        recent_acks_[recent_ack_next_] = {ack, key};
+        recent_acks_[recent_ack_next_] = {ack, key, false};
         recent_ack_next_ = (recent_ack_next_ + 1U) % kRecentAckCount;
     }
 

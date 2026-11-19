@@ -103,7 +103,10 @@ protected:
   virtual uint8_t getAutoAddMaxHops() const { return 0; }  // 0 = no limit, 1 = direct (0 hops), N = up to N-1 hops
   virtual void onContactOverwrite(const uint8_t* pub_key) {};
   virtual void onDiscoveredContact(ContactInfo& contact, bool is_new, uint8_t path_len, const uint8_t* path) = 0;
+  bool ack_via_path = false;   // true while processAck() handles an ACK carried in a path return
   virtual ContactInfo* processAck(const uint8_t *data) = 0;
+  // Called after replying to a flood message with a path return and a plain ACK.
+  virtual void onAckReplySent(const ContactInfo& to, uint8_t hops, bool path_sent, bool ack_sent) { }
   virtual void onContactPathUpdated(const ContactInfo& contact) = 0;
   virtual bool onContactPathRecv(ContactInfo& from, uint8_t* in_path, uint8_t in_path_len, uint8_t* out_path, uint8_t out_path_len, uint8_t extra_type, uint8_t* extra, uint8_t extra_len);
   virtual void onMessageRecv(const ContactInfo& contact, mesh::Packet* pkt, uint32_t sender_timestamp, const char *text) = 0;

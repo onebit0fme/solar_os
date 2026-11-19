@@ -8,6 +8,9 @@
 #ifndef TXT_ACK_DELAY
   #define TXT_ACK_DELAY     200
 #endif
+#ifndef FLOOD_EXTRA_ACK_DELAY
+  #define FLOOD_EXTRA_ACK_DELAY  1200
+#endif
 
 void BaseChatMesh::sendFloodScoped(const ContactInfo& recipient, mesh::Packet* pkt, uint32_t delay_millis) {
   sendFlood(pkt, delay_millis);
@@ -238,6 +241,11 @@ void BaseChatMesh::onPeerDataRecv(mesh::Packet* packet, uint8_t type, int sender
         mesh::Packet* path = createPathReturn(from.id, secret, packet->path, packet->path_len,
                                                 PAYLOAD_TYPE_ACK, (uint8_t *) &ack_hash, 6);
         if (path) sendFloodScoped(from, path, TXT_ACK_DELAY);
+        // Also flood a plain ACK a little later: over several hops the combined
+        // path return can be lost while plain ACK floods still get through.
+        mesh::Packet* ack = createAck(ack_hash, 6);
+        if (ack) sendFloodScoped(from, ack, TXT_ACK_DELAY + FLOOD_EXTRA_ACK_DELAY);
+        onAckReplySent(from, packet->path_len & 63, path != NULL, ack != NULL);
       } else {
         sendAckTo(from, ack_hash, 6);
       }
@@ -323,7 +331,10 @@ bool BaseChatMesh::onContactPathRecv(ContactInfo& from, uint8_t* in_path, uint8_
 
   if (extra_type == PAYLOAD_TYPE_ACK && extra_len >= 4) {
     // also got an encoded ACK!
-    if (processAck(extra) != NULL) {
+    ack_via_path = true;
+    ContactInfo* acked = processAck(extra);
+    ack_via_path = false;
+    if (acked != NULL) {
       txt_send_timeout = 0;   // matched one we're waiting for, cancel timeout timer
     }
   } else if (extra_type == PAYLOAD_TYPE_RESPONSE && extra_len > 0) {
