@@ -8,6 +8,7 @@
 #include <unistd.h>
 #include <string.h>
 
+#include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "solar_os_jobs.h"
@@ -15,6 +16,7 @@
 #include "solar_os_port.h"
 #include "solar_os_storage.h"
 #include "solar_os_task.h"
+#include "solar_os_time.h"
 
 #define LOG_JOB_POLL_MS 250U
 #define LOG_JOB_BATCH 8U
@@ -96,6 +98,21 @@ static void log_job_cleanup(void)
     log_job.next_poll_ms = 0;
 }
 
+static struct {
+    bool valid;
+    int32_t second_of_day;
+    uint32_t uptime_ms;
+} log_job_wall;
+
+static void log_job_refresh_wall(void)
+{
+    solar_os_datetime_t now;
+    log_job_wall.valid = solar_os_time_get_datetime(&now) == ESP_OK &&
+                         now.year >= 2025U;
+    log_job_wall.second_of_day = (int32_t)now.hour * 3600 + now.minute * 60 + now.second;
+    log_job_wall.uptime_ms = (uint32_t)(esp_timer_get_time() / 1000ULL);
+}
+
 static esp_err_t log_job_format_entry(const solar_os_log_entry_t *entry,
                                       bool crlf,
                                       char *line,
@@ -107,10 +124,19 @@ static esp_err_t log_job_format_entry(const solar_os_log_entry_t *entry,
 
     const uint32_t seconds = entry->timestamp_ms / 1000U;
     const uint32_t ms = entry->timestamp_ms % 1000U;
+    // Local wall-clock time of the entry, so logs from two devices line up.
+    char wall[12] = "--:--:--";
+    if (log_job_wall.valid) {
+        const int32_t back = (int32_t)((log_job_wall.uptime_ms - entry->timestamp_ms) / 1000U);
+        const int32_t sod = ((log_job_wall.second_of_day - back) % 86400 + 86400) % 86400;
+        snprintf(wall, sizeof(wall), "%02d:%02d:%02d",
+                 (int)(sod / 3600), (int)(sod / 60 % 60), (int)(sod % 60));
+    }
     const int written = snprintf(line,
                                  line_len,
-                                 "%06" PRIu32 " %5" PRIu32 ".%03" PRIu32 " %c %-16s %s%s%s",
+                                 "%06" PRIu32 " %s %5" PRIu32 ".%03" PRIu32 " %c %-16s %s%s%s",
                                  entry->sequence,
+                                 wall,
                                  seconds,
                                  ms,
                                  log_job_level_letter(entry->level),
@@ -352,6 +378,7 @@ static void log_job_poll(void)
         return;
     }
 
+    log_job_refresh_wall();
     for (size_t i = 0; i < copied; i++) {
         const esp_err_t err = log_job_write_entry(&entries[i]);
         if (err != ESP_OK) {
