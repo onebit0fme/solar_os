@@ -16,6 +16,7 @@
 extern "C" {
 #include "esp_check.h"
 #include "esp_random.h"
+#include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
 #include "freertos/task.h"
@@ -609,6 +610,7 @@ public:
         processStreamOutbound();
         BaseChatMesh::loop();
         finishGroupIfSent();
+        logRadioStats();
         if (!direct_.active && !group_.active) {
             processOutbound();
         }
@@ -1386,6 +1388,30 @@ private:
     esp_err_t last_error_ = ESP_OK;
     RecentAck recent_acks_[kRecentAckCount]{};
     size_t recent_ack_next_ = 0;
+
+    // Every few minutes, log what the radio heard, so a receiver that stops
+    // hearing anything during a day out shows up in the field log.
+    uint32_t stats_logged_ms_ = 0;
+    uint32_t stats_rx_ = 0, stats_rx_errors_ = 0, stats_tx_ = 0;
+
+    void logRadioStats()
+    {
+        const uint32_t now = (uint32_t)(esp_timer_get_time() / 1000ULL);
+        if (stats_logged_ms_ != 0U && now - stats_logged_ms_ < 300000U) {
+            return;
+        }
+        const uint32_t rx = radio_.received();
+        const uint32_t rx_errors = radio_.receiveErrors();
+        const uint32_t tx = radio_.completed();
+        SOLAR_OS_LOGI(DM_TAG, "radio last %u s: heard %u, garbled %u, sent %u, contacts %u",
+                      (unsigned)((now - stats_logged_ms_) / 1000U),
+                      (unsigned)(rx - stats_rx_), (unsigned)(rx_errors - stats_rx_errors_),
+                      (unsigned)(tx - stats_tx_), (unsigned)contacts_loaded_);
+        stats_logged_ms_ = now;
+        stats_rx_ = rx;
+        stats_rx_errors_ = rx_errors;
+        stats_tx_ = tx;
+    }
 
     void rememberAck(uint32_t ack, solar_os_message_key_t key)
     {
